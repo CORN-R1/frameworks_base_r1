@@ -122,6 +122,7 @@ import android.hardware.hdmi.HdmiAudioSystemClient;
 import android.hardware.hdmi.HdmiControlManager;
 import android.hardware.hdmi.HdmiPlaybackClient;
 import android.hardware.hdmi.HdmiPlaybackClient.OneTouchPlayCallback;
+import android.hardware.input.InputManager;
 import android.hardware.input.InputManagerInternal;
 import android.media.AudioManager;
 import android.media.AudioManagerInternal;
@@ -133,6 +134,7 @@ import android.os.Bundle;
 import android.os.DeviceIdleManager;
 import android.os.FactoryTest;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.IBinder;
 import android.os.Message;
 import android.os.PowerManager;
@@ -3152,7 +3154,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
 
         // Specific device key handling
-        if (dispatchKeyToKeyHandlers(event)) {
+        if (dispatchKeyToKeyHandlers(event) == null) {
             return key_consumed;
         }
 
@@ -3208,7 +3210,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
     }
 
-    private boolean dispatchKeyToKeyHandlers(KeyEvent event) {
+    private KeyEvent dispatchKeyToKeyHandlers(KeyEvent event) {
         for (DeviceKeyHandler handler : mDeviceKeyHandlers) {
             try {
                 if (DEBUG_INPUT) {
@@ -3216,13 +3218,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 }
                 event = handler.handleKeyEvent(event);
                 if (event == null) {
-                    return true;
+                    return event;
                 }
             } catch (Exception e) {
                 Slog.w(TAG, "Could not dispatch event to device key handler", e);
             }
         }
-        return false;
+        return event;
     }
 
     // TODO(b/117479243): handle it in InputPolicy
@@ -3801,6 +3803,16 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         mDefaultDisplayPolicy.setHdmiPlugged(plugged, true /* force */);
     }
 
+    private void injectKeyEvent(KeyEvent event) {
+        InputManager inputManager = (InputManager) mContext.getSystemService(Context.INPUT_SERVICE);
+        if (inputManager != null) {
+            Handler handler = new Handler(Looper.getMainLooper());
+            handler.post(() -> inputManager.injectInputEvent(event, InputManager.INJECT_INPUT_EVENT_MODE_ASYNC));
+        } else {
+            Log.e("PhoneWindowManager", "InputManager is null, cannot inject key event.");
+        }
+    }
+
     // TODO(b/117479243): handle it in InputPolicy
     /** {@inheritDoc} */
     @Override
@@ -3833,6 +3845,21 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             }
             return 0;
         }
+
+
+	Log.i("FANCY-PWM", "keycode=" + event.getKeyCode() + ", scancode=" + event.getScanCode());
+        // Specific device key handling
+        KeyEvent newEvent = dispatchKeyToKeyHandlers(event);
+
+        if (newEvent == null) {
+            // consumed
+            return 0;
+        } else if (newEvent != event) {
+            // rebind
+            injectKeyEvent(newEvent);
+            return 0;
+        }
+
 
         final boolean interactive = (policyFlags & FLAG_INTERACTIVE) != 0;
         final boolean canceled = event.isCanceled();
@@ -3937,11 +3964,6 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 && (policyFlags & WindowManagerPolicy.FLAG_VIRTUAL) != 0
                 && (!isNavBarVirtKey || mNavBarVirtualKeyHapticFeedbackEnabled)
                 && event.getRepeatCount() == 0;
-
-        // Specific device key handling
-        if (dispatchKeyToKeyHandlers(event)) {
-            return 0;
-        }
 
         // Handle special keys.
         switch (keyCode) {
